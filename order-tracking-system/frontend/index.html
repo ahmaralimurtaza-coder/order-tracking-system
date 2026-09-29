@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Order Tracking & Live Support</title>
+<script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+<style>
+  :root { --bg:#f4f6fb; --card:#fff; --pri:#4f46e5; --txt:#1f2937; --mut:#6b7280; --bd:#e5e7eb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,Segoe UI,Arial,sans-serif; background:var(--bg); color:var(--txt); }
+  header { background:var(--pri); color:#fff; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+  header h1 { margin:0; font-size:20px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:#ef4444; margin-right:6px; }
+  .dot.on { background:#22c55e; }
+  main { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; padding:16px; max-width:1300px; margin:auto; }
+  .card { background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:16px; }
+  .card h2 { margin:0 0 4px; font-size:17px; }
+  .tag { font-size:11px; background:#eef2ff; color:var(--pri); padding:2px 8px; border-radius:20px; font-weight:600; }
+  input, select, button { padding:8px 10px; border:1px solid var(--bd); border-radius:6px; font-size:14px; }
+  button { background:var(--pri); color:#fff; border:none; cursor:pointer; }
+  button.sec { background:#e5e7eb; color:var(--txt); } button.red { background:#ef4444; }
+  .row { display:flex; gap:8px; margin:8px 0; flex-wrap:wrap; }
+  .row > * { flex:1; min-width:0; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px; border-bottom:1px solid var(--bd); }
+  .st { padding:2px 8px; border-radius:12px; font-size:12px; background:#e0e7ff; }
+  .st.Delivered { background:#dcfce7; } .st.Cancelled { background:#fee2e2; }
+  .box { height:220px; overflow-y:auto; border:1px solid var(--bd); border-radius:6px; padding:8px; background:#fafafa; font-size:13px; }
+  .msg { margin:4px 0; } .msg.customer b { color:#0d9488; } .msg.agent b { color:#c026d3; }
+  .sys { color:var(--mut); font-style:italic; }
+  .alert { padding:6px 8px; margin:4px 0; border-left:4px solid var(--pri); background:#fff; border-radius:4px; }
+  .alert.warning { border-color:#f59e0b; } .alert.success { border-color:#22c55e; } .alert.support { border-color:#c026d3; }
+  pre { background:#111827; color:#a7f3d0; padding:8px; border-radius:6px; font-size:12px; overflow:auto; max-height:160px; }
+  .steps { display:flex; gap:4px; margin:10px 0; } .steps div { flex:1; height:8px; background:#e5e7eb; border-radius:4px; } .steps div.done { background:#22c55e; }
+  small { color:var(--mut); }
+</style>
+</head>
+<body>
+<header>
+  <h1>📦 Order Tracking & Live Support</h1>
+  <div><span id="wsDot" class="dot"></span>WebSocket &nbsp; <span id="sseDot" class="dot"></span>SSE</div>
+</header>
+
+<main>
+  <!-- REST -->
+  <section class="card">
+    <h2>Place Order <span class="tag">REST</span></h2>
+    <small>POST /api/v1/orders · GET /api/v1/catalog</small>
+    <div class="row"><input id="cName" placeholder="Your name" /></div>
+    <div class="row"><select id="product"></select><input id="qty" type="number" min="1" value="1" style="max-width:80px" /></div>
+    <button onclick="placeOrder()">Place Order</button>
+    <h2 style="margin-top:16px">All Orders <span class="tag">REST + WS</span></h2>
+    <table><thead><tr><th>#</th><th>Customer</th><th>Product</th><th>Total</th><th>Status</th></tr></thead><tbody id="orders"></tbody></table>
+  </section>
+
+  <!-- Tracking + JSON-RPC -->
+  <section class="card">
+    <h2>Track Order <span class="tag">WebSocket</span> <span class="tag">JSON-RPC</span></h2>
+    <small>socket: order:track → order:status · POST /rpc</small>
+    <div class="row"><input id="trackId" placeholder="Order ID e.g. 1001" /><button onclick="track()">Track Live</button></div>
+    <div id="trackInfo"><small>No order tracked.</small></div>
+    <div class="steps" id="steps"></div>
+    <div class="row">
+      <button class="sec" onclick="rpc('advanceOrder')">Advance Status (agent)</button>
+      <button class="red" onclick="rpc('cancelOrder')">Cancel Order</button>
+    </div>
+    <pre id="rpcOut">// JSON-RPC response will appear here</pre>
+  </section>
+
+  <!-- Chat -->
+  <section class="card">
+    <h2>Live Support Chat <span class="tag">WebSocket</span></h2>
+    <small>1-on-1 room per order: support:&lt;orderId&gt;. Open in 2 tabs — one Customer, one Agent.</small>
+    <div class="row">
+      <input id="chatName" placeholder="Name" />
+      <select id="role"><option value="customer">Customer</option><option value="agent">Support Agent</option></select>
+    </div>
+    <div class="row"><input id="chatOrder" placeholder="Order ID" /><button onclick="joinChat()">Join Room</button></div>
+    <div class="box" id="chat"></div>
+    <small id="typing">&nbsp;</small>
+    <div class="row"><input id="msg" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendMsg();else socket.emit('chat:typing')" /><button onclick="sendMsg()">Send</button></div>
+  </section>
+
+  <!-- SSE -->
+  <section class="card">
+    <h2>System Alerts <span class="tag">SSE</span></h2>
+    <small>GET /events (EventSource)</small>
+    <div class="row"><input id="alertMsg" placeholder="Admin broadcast message" /><button onclick="broadcast()">Broadcast</button></div>
+    <div class="box" id="alerts" style="height:300px"></div>
+  </section>
+</main>
+
+<script>
+  // 👉 Change this to your Render/Railway backend URL after deployment
+  const API = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:'
+    ? 'http://localhost:4000'
+    : 'https://order-tracking-backend.onrender.com';
+
+  const STATUSES = ['Placed', 'Packed', 'Shipped', 'Out for Delivery', 'Delivered'];
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  let orders = [], trackedId = null, rpcId = 1;
+
+  // ---------- REST ----------
+  async function loadCatalog() {
+    const data = await (await fetch(`${API}/api/v1/catalog`)).json();
+    $('product').innerHTML = data.map((p) => `<option value="${p.id}">${esc(p.name)} — $${p.price}</option>`).join('');
+  }
+  async function loadOrders() {
+    orders = await (await fetch(`${API}/api/v1/orders`)).json();
+    renderOrders();
+  }
+  function renderOrders() {
+    $('orders').innerHTML = orders.slice().reverse().map((o) =>
+      `<tr><td>${o.id}</td><td>${esc(o.customer)}</td><td>${esc(o.product)} ×${o.quantity}</td><td>$${o.total}</td><td><span class="st ${o.status.replace(/ /g, '')}">${o.status}</span></td></tr>`
+    ).join('') || '<tr><td colspan="5"><small>No orders yet</small></td></tr>';
+  }
+  async function placeOrder() {
+    const customer = $('cName').value.trim();
+    if (!customer) return alert('Enter your name');
+    const res = await fetch(`${API}/api/v1/orders`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customer, productId: $('product').value, quantity: $('qty').value }),
+    });
+    const o = await res.json();
+    $('trackId').value = $('chatOrder').value = o.id;
+    $('chatName').value = customer;
+    track();
+  }
+
+  // ---------- WebSocket ----------
+  const socket = io(API, { transports: ['websocket', 'polling'] });
+  socket.on('connect', () => { $('wsDot').classList.add('on'); if (trackedId) socket.emit('order:track', trackedId); });
+  socket.on('disconnect', () => $('wsDot').classList.remove('on'));
+  socket.on('order:created', (o) => { orders.push(o); renderOrders(); });
+  socket.on('order:updated', (o) => { orders = orders.map((x) => (x.id === o.id ? o : x)); renderOrders(); });
+  socket.on('order:status', (o) => { if (o.id === trackedId) renderTrack(o); });
+
+  function track() {
+    trackedId = +$('trackId').value;
+    if (!trackedId) return;
+    socket.emit('order:track', trackedId);
+    const o = orders.find((x) => x.id === trackedId);
+    o ? renderTrack(o) : ($('trackInfo').innerHTML = '<small>Waiting for order…</small>');
+  }
+  function renderTrack(o) {
+    $('trackInfo').innerHTML = `<b>#${o.id}</b> · ${esc(o.product)} · <span class="st ${o.status.replace(/ /g, '')}">${o.status}</span>`;
+    const idx = STATUSES.indexOf(o.status);
+    $('steps').innerHTML = STATUSES.map((s, i) => `<div title="${s}" class="${i <= idx ? 'done' : ''}"></div>`).join('');
+  }
+
+  // Chat
+  function joinChat() {
+    const name = $('chatName').value.trim(), orderId = $('chatOrder').value.trim();
+    if (!name || !orderId) return alert('Enter name and order ID');
+    socket.emit('chat:join', { orderId, role: $('role').value, name });
+    $('chat').innerHTML = `<div class="sys">Joined support room for order #${esc(orderId)}</div>`;
+  }
+  function sendMsg() {
+    const t = $('msg').value.trim();
+    if (!t) return;
+    socket.emit('chat:message', t);
+    $('msg').value = '';
+  }
+  const addChat = (html) => { $('chat').insertAdjacentHTML('beforeend', html); $('chat').scrollTop = 1e9; };
+  socket.on('chat:message', (m) => { addChat(`<div class="msg ${m.role}"><b>${esc(m.name)} (${m.role}):</b> ${esc(m.text)}</div>`); $('typing').innerHTML = '&nbsp;'; });
+  socket.on('chat:system', (t) => addChat(`<div class="sys">${esc(t)}</div>`));
+  let typingT;
+  socket.on('chat:typing', (n) => { $('typing').textContent = `${n} is typing…`; clearTimeout(typingT); typingT = setTimeout(() => ($('typing').innerHTML = '&nbsp;'), 1500); });
+
+  // ---------- JSON-RPC ----------
+  async function rpc(method, params) {
+    params = params || { orderId: +$('trackId').value };
+    const body = { jsonrpc: '2.0', method, params, id: rpcId++ };
+    const res = await (await fetch(`${API}/rpc`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+    $('rpcOut').textContent = '→ ' + JSON.stringify(body) + '\n← ' + JSON.stringify(res, null, 2);
+    return res;
+  }
+  function broadcast() {
+    const message = $('alertMsg').value.trim();
+    if (message) rpc('broadcastAlert', { message }).then(() => ($('alertMsg').value = ''));
+  }
+
+  // ---------- SSE ----------
+  const es = new EventSource(`${API}/events`);
+  es.onopen = () => $('sseDot').classList.add('on');
+  es.onerror = () => $('sseDot').classList.remove('on');
+  es.onmessage = (e) => {
+    const a = JSON.parse(e.data);
+    $('alerts').insertAdjacentHTML('afterbegin',
+      `<div class="alert ${a.type}"><small>${new Date(a.time).toLocaleTimeString()} · ${a.type.toUpperCase()}</small><br>${esc(a.message)}</div>`);
+  };
+
+  loadCatalog(); loadOrders();
+</script>
+</body>
+</html>
