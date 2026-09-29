@@ -10,7 +10,7 @@ A real-time full-stack web app demonstrating **4 communication protocols** in on
 | **Server-Sent Events** | `GET /events` | Live system alerts pushed from server |
 
 **Live Demo**
-- Frontend (Netlify/Vercel): `https://YOUR-FRONTEND-URL`
+- Frontend (Netlify/Vercel): `https://gregarious-biscotti-852479.netlify.app`
 - Backend (Render): `https://order-tracking-system-wxpe.onrender.com`
 
 **Tech:** Node.js, Express, Socket.io (backend) · HTML/CSS/Vanilla JS, Socket.io client, EventSource (frontend). Data is in-memory.
